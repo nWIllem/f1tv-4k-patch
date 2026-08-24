@@ -518,7 +518,7 @@ pattern = (
     r'.*?'
     r'\.end method'
 )
-replacement = """.method private static getDefaultDisplaySize(Landroid/app/Activity;;)Landroid/graphics/Point;
+replacement = """.method private static getDefaultDisplaySize(Landroid/app/Activity;)Landroid/graphics/Point;
     .locals 3
 
     # UHD Patch: always report a 3840x2160 panel
