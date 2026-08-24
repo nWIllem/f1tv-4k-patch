@@ -434,7 +434,7 @@ if [[ "${F1TV_DIRECT_TO_VIEW:-0}" == "0" ]]; then
 elif [[ -n "${RENDER_CONFIG}" && -f "${RENDER_CONFIG}" ]]; then
     info "Patching NRP blit mode to direct-to-view (opt-in, for weak/Amlogic GPUs)..."
     python3 - "${RENDER_CONFIG}" << 'PYEOF'
-import sys
+import sys, re
 
 path = sys.argv[1]
 with open(path, 'r') as f:
@@ -448,23 +448,38 @@ with open(path, 'r') as f:
 # Patched:
 #   return NATIVE_ANDROID_DIRECT_TO_VIEW unconditionally
 
-old = """    iget-object v0, p0, Lcom/tiledmedia/clearvrview/RenderAPIConfig;->nrpTextureBlitMode:Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;
+# Replace the complete getter, allowing for changes to its original implementation.
+pattern = (
+    r'(?ms)^(?P<header>\.method[^\n]*\sgetNRPTextureBlitMode\(\)'
+    r'Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;)\n'
+    r'.*?^\.end method'
+)
 
-    return-object v0"""
+def replacement(match):
+    return match.group("header") + """
+    .locals 1
 
-new = """    sget-object v0, Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;->NATIVE_ANDROID_DIRECT_TO_VIEW:Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;
+    # UHD Patch: force decoder output directly to the SurfaceView
+    sget-object v0, Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;->NATIVE_ANDROID_DIRECT_TO_VIEW:Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;
 
-    return-object v0"""
+    return-object v0
+.end method"""
 
-if old not in content:
-    print(f"Could not find getNRPTextureBlitMode pattern in {path}", file=sys.stderr)
+content, count = re.subn(pattern, replacement, content, count=1)
+
+if count != 1:
+    print(
+        f"Could not find getNRPTextureBlitMode method in {path}",
+        file=sys.stderr
+    )
     sys.exit(1)
 
-content = content.replace(old, new, 1)
-
-with open(path, 'w') as f:
+with open(path, "w") as f:
     f.write(content)
-print(f"  Patched {path}")
+
+print("  Patched getNRPTextureBlitMode → NATIVE_ANDROID_DIRECT_TO_VIEW")
+
+
 PYEOF
 
     [[ $? -eq 0 ]] && ok "NRP direct-to-view patch applied (all devices)" || warn "NRP direct-to-view patch failed"
