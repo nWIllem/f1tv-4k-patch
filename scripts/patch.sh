@@ -427,7 +427,11 @@ fi
 # force direct-to-view on weak/Amlogic GPUs that drop frames on the GL path
 # (accepting the washed-out HDR look as the tradeoff).
 
-RENDER_CONFIG="$(find "${DECOMPILED}" -name 'RenderAPIConfig.smali' -path '*/tiledmedia/*' -print -quit 2>/dev/null || true)"
+RENDER_CONFIG="$(find "${DECOMPILED}" -name 'ViewRendererConfig.smali' -path '*/tiledmedia/*' -print -quit 2>/dev/null || true)"
+
+if [[ -z "${RENDER_CONFIG}" ]]; then
+    RENDER_CONFIG="$(find "${DECOMPILED}" -name 'RenderAPIConfig.smali' -path '*/tiledmedia/*' -print -quit 2>/dev/null || true)"
+fi
 
 if [[ "${F1TV_DIRECT_TO_VIEW:-0}" == "0" ]]; then
     info "Using the EGL/GL render path for correct 4K colours (set F1TV_DIRECT_TO_VIEW=1 for weak/Amlogic GPUs)"
