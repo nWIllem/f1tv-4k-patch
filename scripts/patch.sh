@@ -491,6 +491,104 @@ else
     warn "RenderAPIConfig.smali not found, skipping direct-to-view patch"
 fi
 
+# ─── Request a per-app display refresh rate ────────────────────────────────
+#
+# Android applies WindowManager.LayoutParams.preferredRefreshRate only while
+# this Activity's window is visible. Resetting it on pause lets other apps
+# return to Android's normal frame-rate matching instead of inheriting 50 Hz.
+
+F1TV_REFRESH_RATE="${F1TV_REFRESH_RATE:-0}"
+if [[ "${F1TV_REFRESH_RATE}" != "0" ]]; then
+    PLAYER_ACTIVITY="$(find "${DECOMPILED}" -name 'TiledPlayerActivityTv.smali' -path '*/avs/f1/ui/tiledmediaplayer/*' -print -quit)"
+    [[ -n "${PLAYER_ACTIVITY}" ]] || die "TiledPlayerActivityTv.smali not found"
+
+    info "Requesting ${F1TV_REFRESH_RATE} Hz while the F1TV player is visible..."
+    python3 - "${PLAYER_ACTIVITY}" "${F1TV_REFRESH_RATE}" << 'PYEOF'
+import re
+import struct
+import sys
+
+path = sys.argv[1]
+try:
+    refresh_rate = float(sys.argv[2])
+except ValueError:
+    print(f"Invalid F1TV_REFRESH_RATE: {sys.argv[2]}", file=sys.stderr)
+    sys.exit(1)
+
+if not (refresh_rate > 0.0):
+    print("F1TV_REFRESH_RATE must be greater than zero", file=sys.stderr)
+    sys.exit(1)
+
+with open(path, "r") as f:
+    content = f.read()
+
+class_match = re.search(r'^\.class[^\n]* (L[^;]+;)$', content, re.MULTILINE)
+if not class_match:
+    print("Could not determine player Activity class descriptor", file=sys.stderr)
+    sys.exit(1)
+class_name = class_match.group(1)
+
+helper_name = "setUhdPreferredRefreshRate"
+if f"->{helper_name}(F)V" in content:
+    print("Per-app refresh-rate patch is already present")
+    sys.exit(0)
+
+bits = struct.unpack(">I", struct.pack(">f", refresh_rate))[0]
+
+def inject_lifecycle(method_name, value_instruction):
+    global content
+    pattern = (
+        rf'(?ms)(^\.method protected {method_name}\(\)V\n'
+        rf'.*?^\s*invoke-super \{{p0\}}, [^\n]+->{method_name}\(\)V\n)'
+    )
+    call = (
+        f"\n    # UHD Patch: per-window refresh-rate request\n"
+        f"    {value_instruction}\n\n"
+        f"    invoke-direct {{p0, v0}}, {class_name}->{helper_name}(F)V\n"
+    )
+    content, count = re.subn(pattern, lambda m: m.group(1) + call, content, count=1)
+    if count != 1:
+        print(f"Could not patch {method_name} in {path}", file=sys.stderr)
+        sys.exit(1)
+
+inject_lifecycle("onResume", f"const v0, 0x{bits:08x}")
+inject_lifecycle("onPause", "const/4 v0, 0x0")
+
+helper = f"""
+
+# Applies only to this Activity window. A value of 0 clears the request.
+.method private final {helper_name}(F)V
+    .locals 2
+
+    invoke-virtual {{p0}}, {class_name}->getWindow()Landroid/view/Window;
+
+    move-result-object v0
+
+    invoke-virtual {{v0}}, Landroid/view/Window;->getAttributes()Landroid/view/WindowManager$LayoutParams;
+
+    move-result-object v1
+
+    iput p1, v1, Landroid/view/WindowManager$LayoutParams;->preferredRefreshRate:F
+
+    invoke-virtual {{v0, v1}}, Landroid/view/Window;->setAttributes(Landroid/view/WindowManager$LayoutParams;)V
+
+    return-void
+.end method
+"""
+content = content.rstrip() + helper
+
+with open(path, "w") as f:
+    f.write(content)
+
+print(f"Patched player Activity to request {refresh_rate:g} Hz on resume and clear it on pause")
+PYEOF
+
+    [[ $? -eq 0 ]] || die "Per-app refresh-rate patch failed"
+    ok "Per-app ${F1TV_REFRESH_RATE} Hz request applied"
+else
+    info "Per-app refresh-rate request disabled (set F1TV_REFRESH_RATE=50 to enable)"
+fi
+
 # ─── Force 4K display detection (lifts the 1.5x resolution cap) ─────────────
 #
 # Tiledmedia caps streaming resolution at ~1.5x the display size it detects.
